@@ -1,0 +1,52 @@
+{
+  "name": "evo-voice-cli",
+  "version": "0.1.0",
+  "description": "Command-line interface for Evo Voice (evovoice.io) — for humans and AI agents. Installs the `evov` binary.",
+  "type": "module",
+  "bin": {
+    "evov": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EvoTechMike/evo-voice-cli.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "keywords": [
+    "evo-voice",
+    "evovoice",
+    "voice",
+    "cli",
+    "claude",
+    "claude-code",
+    "skill",
+    "agent"
+  ],
+  "license": "MIT"
+}
