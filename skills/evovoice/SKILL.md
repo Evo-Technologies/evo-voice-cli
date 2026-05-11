@@ -137,6 +137,8 @@ Rule of thumb: if jq output would exceed a screenful, delegate.
 
 The Evo Voice session object *is* the call log. It carries `dialState`, `callState`, `outcome`, `wasMissed`, `direction`, `fromAddress`/`toAddress`, full `log: [{date, message}]`, and the involved `accountId`, `customerId`, `endpointId`.
 
+**Server quirk:** `GET /sessions/{id}` returns the session with `log: []` empty — the log is only populated in **list** responses. `evov session log <id>` works around this by calling `GET /sessions?specificIds=<id>` and extracting the first item's log. Use `evov session log` instead of `session get | jq .log`.
+
 ```bash
 # 1. Find the session — by phone, customer, log text, parent session
 evov session list --start-date 2026-05-09 --from "+15035551234" \

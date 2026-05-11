@@ -28,6 +28,7 @@ interface ListOpts {
   to?: string;
   log?: string;
   parentSessionId?: string;
+  specificId?: string[];
 }
 
 function collect(value: string, prev: string[] = []): string[] {
@@ -54,6 +55,7 @@ export function buildSessionCommand(): Command {
     .option("--to <text>", "Filter by to-address (contains)")
     .option("--log <text>", "Filter by text within the session log")
     .option("--parent-session-id <id>", "Filter by parent session id")
+    .option("--specific-id <id>", "Restrict to exact session id(s) (repeatable). Useful since GET /sessions/{id} strips log.", collect, [] as string[])
     .action(async (opts: ListOpts, command: Command) => {
       const globals = command.optsWithGlobals<GlobalFlags & ListOpts>();
       const cfg = loadConfig();
@@ -78,6 +80,7 @@ export function buildSessionCommand(): Command {
         to: opts.to,
         log: opts.log,
         parentSessionId: opts.parentSessionId,
+        specificIds: (opts.specificId && opts.specificId.length > 0) ? opts.specificId : undefined,
       };
 
       if (globals.dryRun) {
@@ -115,22 +118,31 @@ export function buildSessionCommand(): Command {
 
   addGlobalFlags(root.command("log"))
     .argument("<id>", "Session id")
-    .description("Fetch a session and emit just its .log array (sugar over `get | jq .log`)")
-    .action(async (id: string, _opts, command: Command) => {
-      const globals = command.optsWithGlobals<GlobalFlags>();
+    .description("Fetch a session's log entries. Uses /sessions?specificIds because GET /sessions/{id} strips the log server-side.")
+    .option("--archive", "Search archived sessions (>15 days old)")
+    .action(async (id: string, opts: { archive?: boolean }, command: Command) => {
+      const globals = command.optsWithGlobals<GlobalFlags & { archive?: boolean }>();
       const cfg = loadConfig();
       const env = resolveActiveEnv(cfg, globals.env as EnvName | undefined);
       const prof = requireAuthenticated(env);
+      const query: Record<string, string | number | boolean | string[] | undefined> = {
+        specificIds: [id],
+        countPerPage: 1,
+        simplifiedPaging: true,
+        searchArchive: opts.archive,
+      };
       if (globals.dryRun) {
-        emit(planRequest("GET", env.profile.baseUrl, `/sessions/${encodeURIComponent(id)}`, {}), globals);
+        emit(planRequest("GET", env.profile.baseUrl, "/sessions", { query }), globals);
         return;
       }
       printBanner(env, globals, prof.user);
-      const res = await ssFetch<{ log?: unknown[] }>("GET", `/sessions/${encodeURIComponent(id)}`, {
+      const res = await ssFetch<{ items?: { log?: unknown[] }[] }>("GET", "/sessions", {
         baseUrl: env.profile.baseUrl,
         cookies: prof.cookies,
+        query,
       });
-      emit(res.data?.log ?? [], { ...globals, emptyExit: true });
+      const log = res.data?.items?.[0]?.log ?? [];
+      emit(log, { ...globals, emptyExit: true });
     });
 
   addGlobalFlags(root.command("patch"))

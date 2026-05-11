@@ -96,6 +96,7 @@ evov session delete --start-date-time <iso> --end-date-time <iso>
 | `--to <text>`                 | `to` (contains)               |
 | `--log <text>`                | `log` (text within log)       |
 | `--parent-session-id <id>`    | `parentSessionId`             |
+| `--specific-id <id>` (rep)    | `specificIds` — exact id match. Use this to pull a session WITH its log (GET /sessions/{id} returns log empty server-side). |
 | `--page <n>`                  | `page` (0-based)              |
 | `--count-per-page <n>`        | `countPerPage` (default 25)   |
 | `--all`                       | `all=true`                    |
