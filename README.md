@@ -91,7 +91,7 @@ The skill at [`skills/evovoice/SKILL.md`](skills/evovoice/SKILL.md) teaches Clau
 npm i -g evo-voice-cli
 
 # 2. Install the skill
-npx skills add -g EvoTechMike/evo-voice-cli
+npx skills add -g Evo-Technologies/evo-voice-cli
 
 # 3. Log in
 evov env use staging                # work safely first
