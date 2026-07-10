@@ -16,6 +16,7 @@ Inspired by [`qbo-cli`](https://qbo-cli.com/) and modelled on its sibling [`bett
 | session      | Phase 1 ✅ | `list`, `get`, `log`, `patch`, `delete`  |
 | endpoint     | Phase 1 ✅ | `list`, `get`, `patch`                   |
 | confirm      | Phase 1 ✅ | `confirm <token>` (prod two-phase gate)  |
+| api          | Phase 1 ✅ | `api <method> <path>` (raw escape hatch) |
 | customer     | Phase 2 ⏳ | —                                        |
 | flow         | Phase 2 ⏳ | —                                        |
 | file         | Phase 3 ⏳ | —                                        |
@@ -121,6 +122,14 @@ jq '[.items[] | select(.userMode=="SoftPhone") | .id]' /tmp/e.json > /tmp/ids.js
 for ID in $(jq -r '.[]' /tmp/ids.json); do
   echo '{"managerAccess":"ReadOnly"}' | evov endpoint patch "$ID" -f -
 done
+
+# Raw API escape hatch — any endpoint the CLI doesn't wrap yet.
+# Same auth cookies, same prod two-phase gate; omit the leading slash
+# under Git Bash (or set MSYS_NO_PATHCONV=1) to dodge MSYS path mangling.
+evov api GET "flows?accountIds=$AID"
+evov api POST customers -d '{"accountId":"'$AID'","name":"Harness"}'
+evov api POST flows -f newflow.json          # large bodies from a file
+evov api DELETE "sessions/$SID" --force      # DELETE always needs --force
 
 # Switch env safely
 evov env use prod

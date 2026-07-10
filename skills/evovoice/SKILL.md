@@ -221,6 +221,25 @@ If any phase-1 summary surfaces something unexpected (wrong account, weirder-tha
 - BUT some nested objects (like `appSettings`, `assistantSettings`) may replace whole-cloth. Confirm by pulling, mutating with jq, pushing back if you're unsure.
 - `IsPartialFlowUpdate: true` opts into partial `flowParams` merging — without it, `flowParams` is replaced.
 
+## Raw API escape hatch (`evov api`)
+
+For endpoints the CLI does not wrap yet (flows, customers, phone numbers, user creation, …), use `evov api` instead of curl or ad-hoc scripts — it rides the same stored cookies and the same prod two-phase gate:
+
+```bash
+evov api GET "flows?accountIds=$AID"             # query embedded in path works
+evov api GET sessions/active -q all=true          # or via repeatable -q key=value
+evov api POST customers -d '{"accountId":"...","name":"Harness"}'
+evov api POST flows -f newflow.json               # large bodies (>32KB) via file
+evov api PATCH "sessions/$SID" -d '{"callState":"Disconnected"}'
+evov api DELETE "sessions/$SID" --force           # DELETE always requires --force
+```
+
+Rules:
+- **Omit the leading slash on paths** (`sessions/active`, not `/sessions/active`) — under Git Bash, MSYS converts leading-slash args into Windows paths. The CLI detects the mangled form and tells you, but omitting the slash avoids it entirely.
+- Do NOT use curl against evovoice.io — the server rejects it. `evov api` is the sanctioned raw-access path.
+- Writes on prod behave exactly like every other command: phase-1 summary + exit 11 + `evov confirm <token>`.
+- Discover request/response shapes from the Voice API source (`Voice/src/Voice.Api/**/*.cs` — DTOs carry `[Route]` attributes) when unsure.
+
 ## Troubleshooting
 
 | Symptom                                       | Likely cause / fix                                                                  |

@@ -1,6 +1,7 @@
 import { Command } from "commander";
 
 import { buildAccountCommand } from "./commands/account.js";
+import { buildApiCommand } from "./commands/api.js";
 import { buildAuthCommand } from "./commands/auth.js";
 import { buildConfirmCommand } from "./commands/confirm.js";
 import { buildEndpointCommand } from "./commands/endpoint.js";
@@ -31,6 +32,7 @@ function buildProgram(): Command {
   program.addCommand(buildAccountCommand());
   program.addCommand(buildSessionCommand());
   program.addCommand(buildEndpointCommand());
+  program.addCommand(buildApiCommand());
   program.addCommand(buildConfirmCommand());
 
   // Top-level shortcut: `evov whoami` mirrors `evov auth whoami`.

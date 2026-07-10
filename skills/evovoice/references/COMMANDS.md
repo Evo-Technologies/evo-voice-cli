@@ -160,6 +160,14 @@ jq '.items | length' /tmp/e.json
 echo '{"managerAccess":"ReadOnly"}' | evov endpoint patch $EID -f -
 ```
 
+## api
+
+```
+evov api <method> <path> [-d <json> | -f <file|->] [-q key=value ...] [--force]
+```
+
+Raw escape hatch for endpoints without a dedicated command. Same cookies, same prod two-phase gate. Methods: GET/POST/PATCH/PUT/DELETE. Path may embed a query string; leading slash optional — **omit it under Git Bash** to dodge MSYS path conversion (mangled paths are detected and rejected with guidance). Body via `-d` (inline JSON) or `-f` (file or `-` stdin; use a file for >32KB bodies). GET with a body is a usage error. `DELETE` requires `--force` on every env. Discover DTO shapes from `Voice/src/Voice.Api/**/*.cs`.
+
 ## confirm
 
 ```
@@ -202,8 +210,9 @@ evov exit-codes --json           # exit-code map
 | session      | Phase 1 ✅ | `list`, `get`, `log`, `patch`, `delete` |
 | endpoint     | Phase 1 ✅ | `list`, `get`, `patch`                |
 | confirm      | Phase 1 ✅ | `confirm <token>`                     |
-| customer     | Phase 2 ⏳ | —                                     |
-| flow         | Phase 2 ⏳ | —                                     |
+| api          | Phase 1 ✅ | `api <method> <path>` (raw escape hatch) |
+| customer     | Phase 2 ⏳ | — (use `evov api`)                    |
+| flow         | Phase 2 ⏳ | — (use `evov api`)                    |
 | file         | Phase 3 ⏳ | —                                     |
 | ai-session   | Phase 3 ⏳ | —                                     |
 | report       | Phase 3 ⏳ | —                                     |
