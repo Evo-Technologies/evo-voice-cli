@@ -1,18 +1,29 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
 import { Command } from "commander";
 
 import { buildAccountCommand } from "./commands/account.js";
+import { buildAiSessionCommand } from "./commands/ai-session.js";
 import { buildApiCommand } from "./commands/api.js";
 import { buildAuthCommand } from "./commands/auth.js";
 import { buildConfirmCommand } from "./commands/confirm.js";
+import { buildCustomerCommand } from "./commands/customer.js";
 import { buildEndpointCommand } from "./commands/endpoint.js";
 import { buildEnvCommand } from "./commands/env.js";
+import { buildFileCommand } from "./commands/file.js";
+import { buildFlowCommand } from "./commands/flow.js";
+import { buildIntegrationCommand } from "./commands/integration.js";
+import { buildReportCommand } from "./commands/report.js";
 import { buildSessionCommand } from "./commands/session.js";
+import { buildSysCommand } from "./commands/sys.js";
 import { CliError, EXIT, EXIT_DESCRIPTIONS } from "./exit-codes.js";
 import { addGlobalFlags, normalizeAliases } from "./global-flags.js";
 import { emit, type GlobalFlags } from "./output.js";
 import { findSubcommand, serializeCommand } from "./schema.js";
+import { enforceTenantGuard, tenantGuardStatus } from "./tenant-guard.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 function buildProgram(): Command {
   const program = new Command();
@@ -26,12 +37,20 @@ function buildProgram(): Command {
     .showHelpAfterError();
 
   program.hook("preAction", normalizeAliases);
+  program.hook("preAction", (_thisCommand, actionCommand) => enforceTenantGuard(actionCommand));
 
   program.addCommand(buildAuthCommand());
   program.addCommand(buildEnvCommand());
   program.addCommand(buildAccountCommand());
   program.addCommand(buildSessionCommand());
   program.addCommand(buildEndpointCommand());
+  program.addCommand(buildCustomerCommand());
+  program.addCommand(buildFlowCommand());
+  program.addCommand(buildFileCommand());
+  program.addCommand(buildAiSessionCommand());
+  program.addCommand(buildReportCommand());
+  program.addCommand(buildIntegrationCommand());
+  program.addCommand(buildSysCommand());
   program.addCommand(buildApiCommand());
   program.addCommand(buildConfirmCommand());
 
@@ -43,6 +62,7 @@ function buildProgram(): Command {
       const globals = command.optsWithGlobals<GlobalFlags>();
       const cfg = loadConfig();
       const env = resolveActiveEnv(cfg, globals.env as ("prod" | "staging" | undefined));
+      const guard = tenantGuardStatus(cfg, env.name, env.profile);
       emit({
         env: env.name,
         baseUrl: env.profile.baseUrl,
@@ -51,6 +71,7 @@ function buildProgram(): Command {
         accountName: env.profile.accountName ?? null,
         accountChangedAt: env.profile.accountChangedAt ?? null,
         authenticated: !!env.profile.cookies && Object.keys(env.profile.cookies).length > 0,
+        tenantGuard: guard,
       }, globals);
     });
 
@@ -102,6 +123,9 @@ export function handleError(err: unknown): never {
   process.exit(EXIT.ERR);
 }
 
-main(process.argv).catch(handleError);
+const invokedAsMain = process.argv[1]
+  ? pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
+  : false;
+if (invokedAsMain) main(process.argv).catch(handleError);
 
 export { buildProgram };

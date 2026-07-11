@@ -12,6 +12,7 @@ import {
 } from "../src/config.js";
 import { EXIT } from "../src/exit-codes.js";
 import { executeWrite } from "../src/write-gate.js";
+import { buildSessionCommand } from "../src/commands/session.js";
 
 const fetchMock = vi.fn();
 let tmpRoot: string;
@@ -127,5 +128,32 @@ describe("executeWrite (the two-phase gate)", () => {
 
     stdoutSpy.mockRestore();
     stderrSpy.mockRestore();
+  });
+});
+
+describe("session active commands", () => {
+  it("uses account-wide active calls for admins and keeps the user-specific endpoint explicit", async () => {
+    seedConfig("staging");
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ calls: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+
+    const accountWide = buildSessionCommand();
+    accountWide.exitOverride();
+    await accountWide.parseAsync(["active", "--quiet"], { from: "user" });
+    expect(String(fetchMock.mock.calls[0][0])).toBe(`${ENV_DEFAULTS.staging.baseUrl}/calls/active?accountId=acc1`);
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ sessions: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    const mine = buildSessionCommand();
+    mine.exitOverride();
+    await mine.parseAsync(["active-mine", "--quiet"], { from: "user" });
+    expect(String(fetchMock.mock.calls[1][0])).toBe(`${ENV_DEFAULTS.staging.baseUrl}/sessions/active`);
+
+    stdoutSpy.mockRestore();
   });
 });

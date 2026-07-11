@@ -11,6 +11,8 @@ export const EXIT = {
   NOT_IMPLEMENTED: 9,
   CONFIG: 10,
   CONFIRMATION_REQUIRED: 11,
+  CONFLICT: 12,
+  TENANT_CONFIRMATION_REQUIRED: 13,
 } as const;
 
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT];
@@ -28,6 +30,8 @@ export const EXIT_DESCRIPTIONS: Record<ExitCode, string> = {
   [EXIT.NOT_IMPLEMENTED]: "command not implemented in this phase",
   [EXIT.CONFIG]: "config error",
   [EXIT.CONFIRMATION_REQUIRED]: "prod write requires two-phase confirmation; show summary, then run `evov confirm <token>`",
+  [EXIT.CONFLICT]: "resource changed concurrently or post-write verification failed; refetch and retry",
+  [EXIT.TENANT_CONFIRMATION_REQUIRED]: "tenant context is unconfirmed or idle; ask the user, then run `evov account confirm <nameOrId>`",
 };
 
 export class CliError extends Error {

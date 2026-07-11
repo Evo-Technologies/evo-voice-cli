@@ -59,7 +59,18 @@ function isEmptyResult(data: unknown): boolean {
 function writeOut(target: string, data: unknown): string {
   const resolved = path.resolve(target);
   fs.mkdirSync(path.dirname(resolved), { recursive: true });
-  fs.writeFileSync(resolved, JSON.stringify(data, null, 2));
+  fs.writeFileSync(resolved, JSON.stringify(data, null, 2), { mode: 0o600 });
+  try { fs.chmodSync(resolved, 0o600); } catch { /* Windows */ }
+  return resolved;
+}
+
+export function writeBinaryOut(target: string, data: Uint8Array, ctx: GlobalFlags = {}): string {
+  const resolved = path.resolve(target);
+  fs.mkdirSync(path.dirname(resolved), { recursive: true });
+  fs.writeFileSync(resolved, data, { mode: 0o600 });
+  try { fs.chmodSync(resolved, 0o600); } catch { /* Windows */ }
+  process.stdout.write(`${JSON.stringify({ path: resolved })}\n`);
+  if (ctx.verbose) process.stderr.write(`wrote ${resolved}\n`);
   return resolved;
 }
 

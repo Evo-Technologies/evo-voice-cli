@@ -1,7 +1,7 @@
 import { CliError, EXIT, type ExitCode } from "./exit-codes.js";
 import type { EnvProfile } from "./config.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 export interface SsFetchOptions {
   baseUrl: string;
@@ -11,6 +11,18 @@ export interface SsFetchOptions {
   retry?: boolean;
   /** When true, capture Set-Cookie headers from the response. Used by `auth login`. */
   captureCookies?: boolean;
+}
+
+/** Serializable multipart payload so production confirmations bind exact file bytes. */
+export interface MultipartRequestBody {
+  __evovBodyType: "multipart";
+  fields: Record<string, string>;
+  file: {
+    fieldName: string;
+    fileName: string;
+    contentType: string;
+    dataBase64: string;
+  };
 }
 
 export interface SsFetchResult<T> {
@@ -23,6 +35,13 @@ export interface PlannedRequest {
   method: string;
   url: string;
   body: unknown;
+}
+
+export interface DownloadResult {
+  data: Uint8Array;
+  status: number;
+  contentType?: string;
+  fileName?: string;
 }
 
 export function buildUrl(
@@ -101,8 +120,20 @@ export async function ssFetch<T = unknown>(
 
   const init: RequestInit = { method, headers, redirect: "manual" };
   if (opts.body !== undefined && opts.body !== null) {
-    headers["Content-Type"] = "application/json";
-    init.body = typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body);
+    if (isMultipartBody(opts.body)) {
+      const form = new FormData();
+      for (const [key, value] of Object.entries(opts.body.fields)) form.append(key, value);
+      const bytes = Buffer.from(opts.body.file.dataBase64, "base64");
+      form.append(
+        opts.body.file.fieldName,
+        new Blob([bytes], { type: opts.body.file.contentType }),
+        opts.body.file.fileName,
+      );
+      init.body = form;
+    } else {
+      headers["Content-Type"] = "application/json";
+      init.body = typeof opts.body === "string" ? opts.body : JSON.stringify(opts.body);
+    }
   }
 
   const shouldRetry = opts.retry !== false;
@@ -124,6 +155,41 @@ export async function ssFetch<T = unknown>(
     );
   }
   return { data: data as T, status: res.status, cookies: setCookies };
+}
+
+export function isMultipartBody(body: unknown): body is MultipartRequestBody {
+  return !!body && typeof body === "object" &&
+    (body as { __evovBodyType?: unknown }).__evovBodyType === "multipart";
+}
+
+export async function ssDownload(
+  resourcePath: string,
+  opts: Pick<SsFetchOptions, "baseUrl" | "cookies" | "query" | "retry">,
+): Promise<DownloadResult> {
+  const url = buildUrl(opts.baseUrl, resourcePath, opts.query);
+  const headers: Record<string, string> = {
+    "User-Agent": `evo-voice-cli/${VERSION}`,
+    Accept: "*/*",
+  };
+  const cookieStr = cookieHeader(opts.cookies);
+  if (cookieStr) headers.Cookie = cookieStr;
+  const response = await doFetch(url, { method: "GET", headers, redirect: "follow" }, opts.retry !== false);
+  if (!response.ok) {
+    const text = await response.text();
+    const data = text.length > 0 ? safeJson(text) : undefined;
+    throw new CliError(
+      statusToExit(response.status),
+      formatHttpError("GET", url, response.status, data, text),
+    );
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const nameMatch = /filename\*?=(?:UTF-8''|\")?([^\";]+)/i.exec(disposition);
+  return {
+    data: new Uint8Array(await response.arrayBuffer()),
+    status: response.status,
+    contentType: response.headers.get("content-type") ?? undefined,
+    fileName: nameMatch ? decodeURIComponent(nameMatch[1].trim()) : undefined,
+  };
 }
 
 async function doFetch(url: string, init: RequestInit, shouldRetry: boolean): Promise<Response> {

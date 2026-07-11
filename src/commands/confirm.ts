@@ -9,8 +9,11 @@ import {
   type EnvName,
 } from "../config.js";
 import { addGlobalFlags } from "../global-flags.js";
+import { selectJsonFields } from "../fingerprint.js";
 import { ssFetch } from "../http.js";
 import { emit, note, printBanner, type GlobalFlags } from "../output.js";
+import { enforcePendingTenantGuard } from "../tenant-guard.js";
+import { assertRequestState } from "../write-gate.js";
 
 export function buildConfirmCommand(): Command {
   return addGlobalFlags(new Command("confirm"))
@@ -19,6 +22,7 @@ export function buildConfirmCommand(): Command {
     .action(async (token: string, _opts, command: Command) => {
       const globals = command.optsWithGlobals<GlobalFlags>();
       const pending = getPending(token);
+      enforcePendingTenantGuard(pending.env, pending.accountId, globals);
 
       // Use the env the pending action was created against — not the current active env.
       const cfg = loadConfig();
@@ -31,6 +35,10 @@ export function buildConfirmCommand(): Command {
       // Mark consumed BEFORE issuing the request so a network hang can't be retried into a double-spend.
       consumePending(token);
 
+      if (pending.precondition) {
+        await assertRequestState(pending.baseUrl, prof.cookies, pending.precondition, "precondition");
+      }
+
       const res = await ssFetch(pending.method, pending.path, {
         baseUrl: pending.baseUrl,
         cookies: prof.cookies,
@@ -38,6 +46,11 @@ export function buildConfirmCommand(): Command {
         body: pending.body,
       });
 
-      emit(res.data ?? { ok: true }, globals);
+      if (pending.verification) {
+        await assertRequestState(pending.baseUrl, prof.cookies, pending.verification, "verification");
+      }
+
+      const projected = pending.responseFields ? selectJsonFields(res.data, pending.responseFields) : res.data;
+      emit(projected ?? { ok: true, verified: !!pending.verification }, globals);
     });
 }

@@ -18,11 +18,14 @@ export interface EnvProfile {
   accountId?: string;
   accountName?: string;
   accountChangedAt?: string;
+  tenantConfirmedAt?: string;
+  lastTenantActivityAt?: string;
 }
 
 export interface ConfigFile {
   activeEnv: EnvName;
   envs: Partial<Record<EnvName, EnvProfile>>;
+  tenantGuardIdleMinutes?: number | null;
 }
 
 export interface ResolvedEnv {
@@ -55,6 +58,7 @@ export function pendingPath(): string {
 function blankConfig(): ConfigFile {
   return {
     activeEnv: "staging",
+    tenantGuardIdleMinutes: 15,
     envs: {
       staging: { baseUrl: ENV_DEFAULTS.staging.baseUrl },
     },
@@ -127,11 +131,23 @@ export interface PendingAction {
   path: string;
   query?: Record<string, string | number | string[]>;
   body?: unknown;
+  precondition?: RequestStateCheck;
+  verification?: RequestStateCheck;
+  responseFields?: string[];
   action: string;          // e.g. "DELETE /sessions"
   summary: string;         // human-readable
   createdAt: string;
   expiresAt: string;
   consumed?: boolean;
+}
+
+export interface RequestStateCheck {
+  method: "GET";
+  path: string;
+  query?: Record<string, string | number | string[]>;
+  fields?: string[];
+  expectedHash: string;
+  description: string;
 }
 
 interface PendingFile {

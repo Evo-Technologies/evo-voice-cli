@@ -151,4 +151,36 @@ describe("api command", () => {
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("supports multipart uploads with repeatable form fields", async () => {
+    seedConfig("staging");
+    fetchMock.mockResolvedValue(okResponse({ id: "file1" }));
+    const upload = path.join(tmpRoot, "clip.wav");
+    fs.writeFileSync(upload, Buffer.from([1, 2, 3]));
+
+    await run([
+      "POST", "files",
+      "--upload", upload,
+      "--content-type", "audio/wav",
+      "--form", "accountId=acc1",
+      "--form", "customerId=cust1",
+    ]);
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.body).toBeInstanceOf(FormData);
+    const form = init.body as FormData;
+    expect(form.get("accountId")).toBe("acc1");
+    expect(form.get("customerId")).toBe("cust1");
+    expect((form.get("file") as File).size).toBe(3);
+  });
+
+  it("supports binary downloads without JSON encoding", async () => {
+    seedConfig("staging");
+    fetchMock.mockResolvedValue(new Response(Buffer.from([80, 75, 3, 4]), { status: 200 }));
+    const target = path.join(tmpRoot, "report.xlsx");
+
+    await run(["GET", "reports/r1.xlsx", "--download", "--out", target]);
+
+    expect(fs.readFileSync(target)).toEqual(Buffer.from([80, 75, 3, 4]));
+  });
 });

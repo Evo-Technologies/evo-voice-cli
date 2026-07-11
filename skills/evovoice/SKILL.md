@@ -1,6 +1,6 @@
 ---
 name: evovoice
-description: Manage Evo Voice configuration via the evov CLI — read full session logs (untruncated), investigate calls, bulk-update endpoints, switch between prod and staging, manage accounts. Use whenever the user asks about Evo Voice sessions, calls, endpoints, phone numbers, customers, flows, accounts, users, or session logs.
+description: Manage the full Evo Voice operator API via the evov CLI — sessions and logs, endpoints and numbers, customers, flows, files, AI sessions, reports, integrations, system settings, accounts, and environments. Use whenever the user asks to inspect or change Evo Voice data.
 allowed-tools: Bash(evov *), Bash(jq *), Bash(cat *), Bash(echo *), Bash(date *)
 ---
 
@@ -10,9 +10,23 @@ Thin wrapper over the Evo Voice REST API (ServiceStack on `evovoice.io` / `team.
 
 ## ⚠ Safety rules — read first
 
-Reads on either env: run freely.
-Writes on **STAGING**: run directly. `session delete` requires `--force`.
+Account-scoped reads and writes run only while the tenant context is confirmed and inside its idle window.
+Writes on **STAGING**: run directly. Destructive delete commands require `--force`.
 Writes on **PRODUCTION**: two-phase confirmation (below).
+
+### Idle tenant protocol (exit 13)
+
+The tenant guard defaults to 15 minutes without account-scoped CLI activity. When a command exits 13 and stdout contains `{requiresTenantConfirmation:true, account, env, reason, ...}`:
+
+1. **Tell the user the exact tenant name/id and environment from the payload.**
+2. **Ask which tenant they intend to use.**
+3. **Wait for the user's NEXT message.** Never infer tenant confirmation from an older request or from the active CLI profile.
+4. If their answer matches the active tenant, run `evov account confirm "<exact-name-or-id>"`, then retry the blocked command.
+5. If they name another tenant, run `evov account use "<name-or-id>"`, show them the resulting tenant, wait for confirmation if it was not already explicit in that new message, then run `account confirm`.
+
+Do not run `account confirm` merely because the error told you which tenant was active. The human confirmation is the point of the gate. `whoami`, account list/use/confirm/guard, auth/env management, schema, and local flow-file/blueprint inspection remain available while locked and do not silently extend tenant activity.
+
+Configure with `evov account guard <minutes>` (1..1440); `off` explicitly disables it. `EVO_VOICE_TENANT_IDLE_MINUTES` is an environment override. Different-tenant `--account-id` one-call overrides are refused while enabled; switch and reconfirm instead.
 
 ### Two-phase protocol (prod writes)
 
@@ -23,6 +37,8 @@ When you run a write (create / update / delete) on the **prod** env and the CLI 
 3. **Wait for an affirmative reply in the user's NEXT message.** Do NOT infer confirmation from anything said earlier in the conversation — even if the user previously said "go ahead with all this." Each phase-1 needs its own fresh "yes".
 4. **Only then** run `evov confirm <token>`.
 5. If the user says no or asks for changes: do NOT run `evov confirm`. The token expires in 5 minutes. Re-run phase 1 with new params if they want to retry.
+
+If `evov confirm <token>` itself exits 13, the token has not executed. Follow the idle tenant protocol, then retry the token if it has not expired.
 
 The rule exists because the user might be asking about a different account than the CLI is currently set to. The `summary` field names the target account in plain prose — quoting it verbatim gives the user a chance to read "Acme Corp" and reply "wait, no, I meant Beta Corp" before anything destructive happens.
 
@@ -40,10 +56,11 @@ evov env use staging
 evov env list                        # both envs, active marked, auth state
 evov account use "Acme Corp"         # switch active account inside current env
 evov account list                    # see what the current user can access
+evov account confirm "Acme Corp"     # only after the user confirms this exact tenant
 evov --env staging session list ...  # one-call env override
 ```
 
-After every switch, run `evov whoami` and read it. Never chain a write after a switch without re-verifying.
+After every switch, run `evov whoami`, show/read the tenant, obtain the user's confirmation, and run `account confirm`. Never chain an account-scoped command after a switch without this step.
 
 ### Worked example — the right way
 
@@ -118,7 +135,7 @@ evov session log <SID> --out .evo/log.json
 jq -r '.[] | "\(.date)\t\(.message)"' .evo/log.json
 ```
 
-When `--out` is set, stdout becomes `{"path":"<resolved>"}` so you can chain.
+When `--out` is set, stdout becomes `{"path":"<resolved>"}` so you can chain. JSON and binary output files are created with owner-only permissions (mode 600) where the platform supports it.
 
 ## Bulk scans: delegate to a sub-agent
 
@@ -221,15 +238,81 @@ If any phase-1 summary surfaces something unexpected (wrong account, weirder-tha
 - BUT some nested objects (like `appSettings`, `assistantSettings`) may replace whole-cloth. Confirm by pulling, mutating with jq, pushing back if you're unsure.
 - `IsPartialFlowUpdate: true` opts into partial `flowParams` merging — without it, `flowParams` is replaced.
 
-## Raw API escape hatch (`evov api`)
+## Full API command surface
 
-For endpoints the CLI does not wrap yet (flows, customers, phone numbers, user creation, …), use `evov api` instead of curl or ad-hoc scripts — it rides the same stored cookies and the same prod two-phase gate:
+First-class groups exist for `account`, `session`, `endpoint`, `customer`, `flow`, `file`, `ai-session`, `report`, `integration`, and `sys`. Discover exact current operations and flags before an unfamiliar task:
+
+```bash
+evov schema --json
+evov schema customer --json
+evov schema report run --json
+```
+
+See `references/COMMANDS.md` for the condensed command guide.
+
+### Flow engineering workflow
+
+Do not load a full flow into the conversation unless raw node JSON is specifically needed. Start with the compact, secret-redacted logic graph:
+
+```bash
+evov flow logic "$FLOW_ID" --out /tmp/flow-logic.json
+jq '{flow,nodes,stats,warnings,references}' /tmp/flow-logic.json
+evov flow validate "$FLOW_ID"
+```
+
+Before changing a shared flow, inspect its callers and assigned endpoints:
+
+```bash
+evov flow impact "$FLOW_ID"
+```
+
+Prefer targeted edit commands. They fetch the current graph, mutate a copy, validate it, show a compact semantic result, and PATCH the complete nodes array safely:
+
+```bash
+evov flow node set "$FLOW_ID" start Timeout --value 45 --preview
+evov flow connect "$FLOW_ID" start OnFailure voicemail --preview
+# Repeat without --preview only after reviewing valid=true and the semantic diff.
+```
+
+Targeted writes carry a hash of the nodes they were based on. The CLI checks it immediately before PATCH, stores it inside production confirmation tokens, checks it again when `evov confirm` executes, then refetches and verifies the intended graph. Exit 12 means the graph changed concurrently or the server did not persist the intended result; refetch and start over rather than forcing the stale patch. This is best-effort concurrency protection because the backend exposes no atomic conditional PATCH/ETag; a narrow check-to-write race cannot be eliminated client-side.
+
+Use `flow edit -f operations.json --preview` to combine several `set`, `connect`, `disconnect`, `add-node`, or `remove-node` operations into one validated PATCH. Node removal blocks dangling inbound transitions unless `--disconnect-incoming` is explicit. Node addition must use a real backend-compatible node object; missing ids are generated.
+
+For graph transformations not expressible as targeted operations, compare the intended full version structurally:
+
+```bash
+evov flow get "$FLOW_ID" --out /tmp/before.json
+# Create /tmp/after.json locally without printing it into chat.
+evov flow validate --file /tmp/after.json
+evov flow diff --left-file /tmp/before.json --right-file /tmp/after.json
+```
+
+Remember that `nodes`, `parameters`, `exits`, and `roles` replace their complete arrays when present in `flow patch`; they do not merge. Use sparse patches for scalar changes. For graph changes, start from the current full arrays, modify them locally, validate, then patch.
+
+For cross-account movement, use portable packages—not the backend package command—when any node references account resources:
+
+```bash
+evov flow export-portable "$FLOW_ID" --out /tmp/portable.json  # invoked subflows included recursively
+evov flow import-portable -f /tmp/portable.json --preflight
+# Supply --map mappings.json if preflight reports unresolved/ambiguous resources.
+evov flow import-portable -f /tmp/portable.json --map mappings.json
+```
+
+Treat a reviewed portable package as reusable common functionality with `flow blueprint save/list/show/apply`. Use explicit `--revision` values for production patterns. Optional `--variables` definitions point to literal package paths; supply values through repeatable `--set name=value`. Resource IDs remain mappings, not variables. Preflight separately in every destination account because resource names, custom-field schemas, and existing flow names are account-specific. `--dry-run` only describes the requests; `--preflight` performs the read-only destination resolution and compatibility checks.
+
+Portable exports and saved blueprints contain the original literal values, potentially including credentials. Keep them out of chat and protect the files. Tags, customer assignments, descriptions, and flow roles are not preserved by the backend package importer. After import, run `flow reconcile-portable -f ... --preview`, then apply it; on production select one flow at a time with `--flow` so every metadata PATCH receives its own confirmation.
+
+## Low-level API escape hatch (`evov api`)
+
+For internal callback routes or endpoints deployed after this CLI release, use `evov api` instead of curl or ad-hoc scripts — it rides the same stored cookies and the same prod two-phase gate:
 
 ```bash
 evov api GET "flows?accountIds=$AID"             # query embedded in path works
-evov api GET sessions/active -q all=true          # or via repeatable -q key=value
+evov api GET calls/active -q accountId="$AID"     # account-wide active calls
 evov api POST customers -d '{"accountId":"...","name":"Harness"}'
 evov api POST flows -f newflow.json               # large bodies (>32KB) via file
+evov api POST files --upload audio.wav --content-type audio/wav --form accountId="$AID"
+evov api GET "reports/$RID.xlsx" --download --out report.xlsx
 evov api PATCH "sessions/$SID" -d '{"callState":"Disconnected"}'
 evov api DELETE "sessions/$SID" --force           # DELETE always requires --force
 ```
@@ -248,8 +331,10 @@ Rules:
 | 403 Forbidden                                 | Wrong account active for this resource. `evov whoami`, then `evov account use ...`. |
 | 404 on a known session id                     | Likely archived (>15 days). Add `--archive` to `session list`.                      |
 | Exit 11 / `requiresConfirmation: true`        | Prod write phase 1. Quote `summary`, wait for explicit yes, then `evov confirm`.    |
+| Exit 13 / `requiresTenantConfirmation: true`  | Show the tenant, ask the user which tenant, wait, then run `account confirm`.       |
 | `evov confirm` exit 4 "expired"               | 5-min TTL passed. Re-run phase 1 to get a fresh token.                              |
 | `evov confirm` exit 4 "already consumed"      | Single-use token. Re-run phase 1.                                                   |
+| Exit 12 / concurrent-change conflict           | Refetch the flow, review a new preview/diff, and rerun the targeted edit.           |
 | `jq '.[]'` returns nothing on a `list`         | Use `jq '.items[]'`.                                                                |
 | "NOTE: active account changed N min ago"      | Re-verify with the user before confirming the write.                                |
 | `--account-name` override didn't switch       | By design — name-based overrides require `evov account use` for safety. Use `--account-id` for one-call overrides. |
@@ -264,7 +349,7 @@ evov exit-codes --json
 
 ## Exit codes
 
-`0` ok · `1` err · `2` usage · `3` empty result · `4` auth · `5` not-found · `6` forbidden · `7` rate-limit · `8` retryable upstream · `9` not-impl · `10` config · **`11` confirmation-required**
+`0` ok · `1` err · `2` usage · `3` empty result · `4` auth · `5` not-found · `6` forbidden · `7` rate-limit · `8` retryable upstream · `9` not-impl · `10` config · **`11` production confirmation required** · **`12` concurrent-change/verification conflict** · **`13` tenant reconfirmation required**
 
 ## Reference
 

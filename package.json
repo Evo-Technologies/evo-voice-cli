@@ -1,6 +1,6 @@
 {
   "name": "evo-voice-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Command-line interface for Evo Voice (evovoice.io) — for humans and AI agents. Installs the `evov` binary.",
   "type": "module",
   "bin": {
@@ -8,6 +8,7 @@
   },
   "files": [
     "dist",
+    "scripts",
     "skills",
     "README.md"
   ],
@@ -25,6 +26,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
+    "test:staging-flow": "node scripts/staging-flow-smoke.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run typecheck && npm test && npm run build"

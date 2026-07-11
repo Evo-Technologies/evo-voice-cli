@@ -17,6 +17,7 @@ import { CliError, EXIT } from "../exit-codes.js";
 import { addGlobalFlags } from "../global-flags.js";
 import { getAuthStatus, postCredentials } from "../http.js";
 import { emit, type GlobalFlags } from "../output.js";
+import { tenantGuardStatus } from "../tenant-guard.js";
 
 interface LoginOpts {
   user?: string;
@@ -57,13 +58,16 @@ export function buildAuthCommand(): Command {
 
       const picked = pickAccount(accountIds, accountNames, globals.accountId, globals.accountName, !!globals.noInput);
 
+      const now = new Date().toISOString();
       const newCfg: ConfigFile = setEnvProfile(cfg, envName, {
         baseUrl,
         user: status.emailAddress ?? user,
         cookies,
         accountId: picked?.id,
         accountName: picked?.name,
-        accountChangedAt: new Date().toISOString(),
+        accountChangedAt: now,
+        tenantConfirmedAt: picked ? now : undefined,
+        lastTenantActivityAt: picked ? now : undefined,
       });
       saveConfig(newCfg);
 
@@ -129,6 +133,7 @@ export function buildAuthCommand(): Command {
       const globals = command.optsWithGlobals<GlobalFlags>();
       const cfg = loadConfig();
       const env = resolveActiveEnv(cfg, globals.env as EnvName | undefined);
+      const guard = tenantGuardStatus(cfg, env.name, env.profile);
       emit({
         env: env.name,
         baseUrl: env.profile.baseUrl,
@@ -137,6 +142,7 @@ export function buildAuthCommand(): Command {
         accountName: env.profile.accountName ?? null,
         accountChangedAt: env.profile.accountChangedAt ?? null,
         authenticated: !!env.profile.cookies && Object.keys(env.profile.cookies).length > 0,
+        tenantGuard: guard,
       }, globals);
     });
 

@@ -11,6 +11,14 @@ import { addGlobalFlags } from "../global-flags.js";
 import { planRequest, ssFetch } from "../http.js";
 import { emit, printBanner, readBodyFromFlag, type GlobalFlags } from "../output.js";
 import { executeWrite } from "../write-gate.js";
+import {
+  encoded,
+  executeJsonWrite,
+  executeRead,
+  readObjectBody,
+  requireAccountId,
+  resolveCommandContext,
+} from "./common.js";
 
 interface ListOpts {
   page?: string;
@@ -98,7 +106,7 @@ export function buildSessionCommand(): Command {
 
   addGlobalFlags(root.command("get"))
     .argument("<id>", "Session id")
-    .description("Fetch one session including its full log (GET /sessions/{id})")
+    .description("Fetch one session (GET /sessions/{id}; use `session log` because this route may strip the log)")
     .action(async (id: string, _opts, command: Command) => {
       const globals = command.optsWithGlobals<GlobalFlags>();
       const cfg = loadConfig();
@@ -213,7 +221,164 @@ export function buildSessionCommand(): Command {
       if (result !== undefined) emit(result ?? { ok: true }, globals);
     });
 
+  addGlobalFlags(root.command("active"))
+    .description("List active calls for the active account (GET /calls/active)")
+    .action(async (_opts, command: Command) => {
+      const context = resolveCommandContext(command);
+      await executeRead(context, "/calls/active", { accountId: requireAccountId(context) }, { emptyExit: true });
+    });
+
+  addGlobalFlags(root.command("active-mine"))
+    .description("List active sessions for the signed-in phone user (requires a matching user endpoint)")
+    .action(async (_opts, command: Command) => {
+      await executeRead(resolveCommandContext(command), "/sessions/active", undefined, { emptyExit: true });
+    });
+
+  addGlobalFlags(root.command("mine"))
+    .description("List sessions belonging to the current user")
+    .action(async (_opts, command: Command) => {
+      await executeRead(resolveCommandContext(command), "/sessions/my", undefined, { emptyExit: true });
+    });
+
+  addGlobalFlags(root.command("transcript"))
+    .argument("<id>", "Session id")
+    .description("Get a chat transcript")
+    .option("--include-historical", "Include historical messages")
+    .option("--historical-cut-off-date <date>", "Historical cutoff date")
+    .action(async (id: string, opts: { includeHistorical?: boolean; historicalCutOffDate?: string }, command: Command) => {
+      await executeRead(resolveCommandContext(command), `/sessions/${encoded(id)}/transcript`, {
+        includeHistorical: opts.includeHistorical,
+        historicalCutOffDate: opts.historicalCutOffDate,
+      }, { emptyExit: true });
+    });
+
+  addGlobalFlags(root.command("create").alias("new"))
+    .description("Create a voice/chat/fax session (POST /sessions)")
+    .requiredOption("-f, --file <path>", "JSON body file (use - for stdin)")
+    .action(async (opts: { file?: string }, command: Command) => {
+      const context = resolveCommandContext(command);
+      const body = readObjectBody(opts.file);
+      await executeJsonWrite(context, {
+        method: "POST",
+        path: "/sessions",
+        body,
+        summary: `Create session on ${context.accountName}; fields: ${listChangedKeys(body)}`,
+      });
+    });
+
+  addGlobalFlags(root.command("outgoing"))
+    .description("Start an outgoing flow call (POST /sessions/outgoing)")
+    .requiredOption("-f, --file <path>", "JSON body file (use - for stdin)")
+    .action(async (opts: { file?: string }, command: Command) => {
+      const context = resolveCommandContext(command);
+      const body = readObjectBody(opts.file);
+      await executeJsonWrite(context, {
+        method: "POST",
+        path: "/sessions/outgoing",
+        body,
+        summary: `Start outgoing session on ${context.accountName}; fields: ${listChangedKeys(body)}`,
+      });
+    });
+
+  addGlobalFlags(root.command("end"))
+    .argument("<id>", "Session id")
+    .description("End one session; staging requires --force")
+    .option("--call-sid <sid>", "Specific call SID to end")
+    .action(async (id: string, opts: { callSid?: string }, command: Command) => {
+      const context = resolveCommandContext(command);
+      await executeJsonWrite(context, {
+        method: "DELETE",
+        path: `/sessions/${encoded(id)}`,
+        query: opts.callSid ? { callSid: opts.callSid } : undefined,
+        summary: `end session ${id} on ${context.accountName}`,
+      }, { destructive: true });
+    });
+
+  addBodyAction(root, "hold", "POST", "hold", "Put a session on hold or transfer hold");
+  addBodyAction(root, "redirect", "POST", "redirect", "Redirect a session to another destination");
+  addBodyAction(root, "add-log", "POST", "log", "Append text to a session log");
+  addBodyAction(root, "message", "POST", "messages", "Send a message in a session");
+  addBodyAction(root, "invite-member", "POST", "members", "Invite a chat member");
+  addBodyAction(root, "conference", "POST", "conference", "Turn a session into a conference");
+  addBodyAction(root, "add-conference-member", "POST", "conference/members", "Add a conference member");
+
+  addGlobalFlags(root.command("reject"))
+    .argument("<id>", "Session id")
+    .description("Reject a session")
+    .action(async (id: string, _opts, command: Command) => {
+      const context = resolveCommandContext(command);
+      await executeJsonWrite(context, {
+        method: "POST",
+        path: `/sessions/${encoded(id)}/reject`,
+        summary: `Reject session ${id} on ${context.accountName}`,
+      });
+    });
+
+  addGlobalFlags(root.command("record"))
+    .argument("<id>", "Session id")
+    .description("Start recording a session")
+    .action(async (id: string, _opts, command: Command) => {
+      const context = resolveCommandContext(command);
+      await executeJsonWrite(context, {
+        method: "POST",
+        path: `/sessions/${encoded(id)}/record`,
+        summary: `Record session ${id} on ${context.accountName}`,
+      });
+    });
+
+  addGlobalFlags(root.command("remove-member"))
+    .argument("<id>", "Session id")
+    .argument("<memberId>", "Member id")
+    .description("Remove a chat member; staging requires --force")
+    .action(async (id: string, memberId: string, _opts, command: Command) => {
+      const context = resolveCommandContext(command);
+      await executeJsonWrite(context, {
+        method: "DELETE",
+        path: `/sessions/${encoded(id)}/members/${encoded(memberId)}`,
+        summary: `remove member ${memberId} from session ${id} on ${context.accountName}`,
+      }, { destructive: true });
+    });
+
+  addGlobalFlags(root.command("patch-conference-member"))
+    .argument("<id>", "Session id")
+    .argument("<callSid>", "Conference member call SID")
+    .description("Hold/mute a conference member")
+    .requiredOption("-f, --file <path>", "JSON body file (use - for stdin)")
+    .action(async (id: string, callSid: string, opts: { file?: string }, command: Command) => {
+      const context = resolveCommandContext(command);
+      const body = readObjectBody(opts.file);
+      await executeJsonWrite(context, {
+        method: "PATCH",
+        path: `/sessions/${encoded(id)}/conference/members/${encoded(callSid)}`,
+        body,
+        summary: `Patch conference member ${callSid} in session ${id}; fields: ${listChangedKeys(body)}`,
+      });
+    });
+
   return root;
+}
+
+function addBodyAction(
+  root: Command,
+  name: string,
+  method: "POST" | "PATCH",
+  suffix: string,
+  description: string,
+): void {
+  addGlobalFlags(root.command(name))
+    .argument("<id>", "Session id")
+    .description(description)
+    .requiredOption("-f, --file <path>", "JSON body file (use - for stdin)")
+    .action(async (id: string, opts: { file?: string }, command: Command) => {
+      const context = resolveCommandContext(command);
+      const body = readObjectBody(opts.file);
+      await executeJsonWrite(context, {
+        method,
+        path: `/sessions/${encoded(id)}/${suffix}`,
+        body,
+        summary: `${description} ${id} on ${context.accountName}; fields: ${listChangedKeys(body)}`,
+      });
+    });
 }
 
 function resolveAccountId(globals: GlobalFlags, fallback?: string): string | undefined {

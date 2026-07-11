@@ -12,6 +12,22 @@ import { CliError, EXIT } from "../exit-codes.js";
 import { addGlobalFlags } from "../global-flags.js";
 import { getAuthStatus, ssFetch } from "../http.js";
 import { emit, printBanner, type GlobalFlags } from "../output.js";
+import {
+  configureTenantGuard,
+  confirmTenantContext,
+  tenantGuardStatus,
+} from "../tenant-guard.js";
+import {
+  addPaginationOptions,
+  changedKeys,
+  encoded,
+  executeJsonWrite,
+  executeRead,
+  paginationQuery,
+  readObjectBody,
+  resolveCommandContext,
+  type PaginationOptions,
+} from "./common.js";
 
 interface AccountInfo {
   id: string;
@@ -94,6 +110,8 @@ export function buildAccountCommand(): Command {
         accountId: ids[idx],
         accountName: names[idx],
         accountChangedAt: new Date().toISOString(),
+        tenantConfirmedAt: undefined,
+        lastTenantActivityAt: undefined,
       };
       const newCfg = setEnvProfile(cfg, env.name, newProf);
       saveConfig(newCfg);
@@ -103,7 +121,110 @@ export function buildAccountCommand(): Command {
         accountId: newProf.accountId,
         accountName: newProf.accountName,
         accountChangedAt: newProf.accountChangedAt,
+        requiresTenantConfirmation: true,
       }, globals);
+    });
+
+  addGlobalFlags(cmd.command("confirm"))
+    .argument("<nameOrId>", "Exact active tenant name or id")
+    .description("Explicitly confirm the active tenant after login, switching, or idle expiry")
+    .action(async (nameOrId: string, _opts, command: Command) => {
+      const globals = command.optsWithGlobals<GlobalFlags>();
+      const status = confirmTenantContext(globals.env as EnvName | undefined, nameOrId);
+      emit({ confirmed: true, tenantGuard: status }, globals);
+    });
+
+  addGlobalFlags(cmd.command("guard"))
+    .argument("[minutes]", "Idle minutes (1..1440), off/0 to disable; omit to show")
+    .description("Show or configure the tenant idle-confirmation guard")
+    .action(async (minutes: string | undefined, _opts, command: Command) => {
+      const globals = command.optsWithGlobals<GlobalFlags>();
+      if (minutes !== undefined) {
+        const normalized = minutes.trim().toLowerCase();
+        if (["off", "0", "disabled"].includes(normalized)) configureTenantGuard(null);
+        else configureTenantGuard(Number(minutes));
+      }
+      const cfg = loadConfig();
+      const env = resolveActiveEnv(cfg, globals.env as EnvName | undefined);
+      emit({
+        configuredIdleMinutes: cfg.tenantGuardIdleMinutes === undefined ? 15 : cfg.tenantGuardIdleMinutes,
+        tenantGuard: tenantGuardStatus(cfg, env.name, env.profile),
+      }, globals);
+    });
+
+  const search = addGlobalFlags(cmd.command("search"))
+    .description("Search full account records (GET /accounts; normally SystemAdministrator only)")
+    .option("--name <text>", "Filter by account name");
+  addPaginationOptions(search).action(async (opts: PaginationOptions & { name?: string }, command: Command) => {
+    await executeRead(resolveCommandContext(command), "/accounts", {
+      ...paginationQuery(opts),
+      nameFilter: opts.name,
+    }, { emptyExit: true });
+  });
+
+  addGlobalFlags(cmd.command("create").alias("new"))
+    .description("Create an account (POST /accounts; SystemAdministrator only)")
+    .requiredOption("-f, --file <path>", "JSON body file (use - for stdin)")
+    .action(async (opts: { file?: string }, command: Command) => {
+      const context = resolveCommandContext(command);
+      const body = readObjectBody(opts.file);
+      await executeJsonWrite(context, {
+        method: "POST",
+        path: "/accounts",
+        body,
+        summary: `Create account; fields: ${changedKeys(body)}`,
+      });
+    });
+
+  addGlobalFlags(cmd.command("patch"))
+    .argument("<id>", "Account id")
+    .description("Patch an account (SystemAdministrator only)")
+    .requiredOption("-f, --file <path>", "JSON body file (use - for stdin)")
+    .action(async (id: string, opts: { file?: string }, command: Command) => {
+      const context = resolveCommandContext(command);
+      const body = readObjectBody(opts.file);
+      await executeJsonWrite(context, {
+        method: "PATCH",
+        path: `/accounts/${encoded(id)}`,
+        body,
+        summary: `Patch account ${id}; fields: ${changedKeys(body)}`,
+      });
+    });
+
+  addGlobalFlags(cmd.command("check"))
+    .argument("<id>", "Account id")
+    .description("Run server-side account checks")
+    .action(async (id: string, _opts, command: Command) => {
+      const context = resolveCommandContext(command);
+      await executeJsonWrite(context, {
+        method: "POST",
+        path: `/accounts/${encoded(id)}/check`,
+        summary: `Run checks for account ${id}`,
+      });
+    });
+
+  addGlobalFlags(cmd.command("regenerate-tokens"))
+    .argument("<id>", "Account id")
+    .description("Regenerate account tokens")
+    .action(async (id: string, _opts, command: Command) => {
+      const context = resolveCommandContext(command);
+      await executeJsonWrite(context, {
+        method: "POST",
+        path: `/accounts/${encoded(id)}/tokens`,
+        summary: `Regenerate tokens for account ${id}`,
+      });
+    });
+
+  addGlobalFlags(cmd.command("delete"))
+    .argument("<id>", "Account id")
+    .description("Delete an account; staging requires --force")
+    .action(async (id: string, _opts, command: Command) => {
+      const context = resolveCommandContext(command);
+      await executeJsonWrite(context, {
+        method: "DELETE",
+        path: `/accounts/${encoded(id)}`,
+        summary: `delete account ${id}`,
+      }, { destructive: true });
     });
 
   return cmd;

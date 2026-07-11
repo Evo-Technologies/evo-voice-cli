@@ -5,9 +5,11 @@ import {
   recordPending,
   type EnvName,
   type PendingAction,
+  type RequestStateCheck,
   type ResolvedEnv,
 } from "./config.js";
 import { CliError, EXIT } from "./exit-codes.js";
+import { fingerprintJson, selectJsonFields } from "./fingerprint.js";
 import { ssFetch } from "./http.js";
 import { emit, type GlobalFlags } from "./output.js";
 
@@ -16,6 +18,9 @@ export interface WriteRequest {
   path: string;
   query?: Record<string, string | number | string[]>;
   body?: unknown;
+  precondition?: RequestStateCheck;
+  verification?: RequestStateCheck;
+  responseFields?: string[];
   /** Human-readable summary of the request, with account name in plain prose. */
   summary: string;
 }
@@ -42,6 +47,9 @@ export async function executeWrite<T = unknown>(
   req: WriteRequest,
   ctx: GlobalFlags,
 ): Promise<T | void> {
+  if (req.precondition) {
+    await assertRequestState(env.profile.baseUrl, cookies, req.precondition, "precondition");
+  }
   if (isProd(env)) {
     const token = newToken();
     const now = new Date();
@@ -56,6 +64,9 @@ export async function executeWrite<T = unknown>(
       path: req.path,
       query: req.query,
       body: req.body,
+      precondition: req.precondition,
+      verification: req.verification,
+      responseFields: req.responseFields,
       action: `${req.method} ${req.path}`,
       summary: req.summary,
       createdAt: now.toISOString(),
@@ -102,5 +113,28 @@ export async function executeWrite<T = unknown>(
     query: req.query as Record<string, string | number | boolean | string[] | undefined> | undefined,
     body: req.body,
   });
+  if (req.verification) {
+    await assertRequestState(env.profile.baseUrl, cookies, req.verification, "verification");
+  }
   return res.data;
+}
+
+export async function assertRequestState(
+  baseUrl: string,
+  cookies: Record<string, string>,
+  check: RequestStateCheck,
+  stage: "precondition" | "verification",
+): Promise<void> {
+  const response = await ssFetch(check.method, check.path, {
+    baseUrl,
+    cookies,
+    query: check.query as Record<string, string | number | boolean | string[] | undefined> | undefined,
+  });
+  const actualHash = fingerprintJson(selectJsonFields(response.data, check.fields));
+  if (actualHash !== check.expectedHash) {
+    const message = stage === "precondition"
+      ? `${check.description} changed after it was read. No write was sent; refetch, review the new diff, and retry.`
+      : `The write was sent, but ${check.description} did not match the intended state afterward. Refetch before taking further action.`;
+    throw new CliError(EXIT.CONFLICT, message);
+  }
 }
